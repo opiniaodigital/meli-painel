@@ -121,14 +121,24 @@ export function createApp({ db, config, fetchImpl, now }) {
   });
   app.post('/margem/atualizar', requireLogin, async (req, res) => { await ml.syncMargens(req.session.user_id, 60); res.redirect('/margem'); });
   app.get('/devolucoes', requireLogin, async (req, res) => {
-    const userId = req.session.user_id; const lastSync = db.getDevolucoesSyncAt(userId);
-    if (!lastSync || lastSync < Date.now() - 60 * 60 * 1000) await ml.syncDevolucoes(userId, 90);
+    const userId = req.session.user_id; const lastSync = db.getDevolucoesSyncAt(userId); let syncWarning = null;
+    if (!req.query.rate_limited && (!lastSync || lastSync < Date.now() - 60 * 60 * 1000)) {
+      try { await ml.syncDevolucoes(userId, 90); } catch (error) {
+        if (error instanceof AppError && error.status === 429) syncWarning = 'O Mercado Livre atingiu o limite temporário de consultas. Exibindo os dados da última sincronização; tente Atualizar novamente mais tarde.';
+        else throw error;
+      }
+    }
     const from = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? `${req.query.de}T00:00:00.000Z` : null;
     const to = typeof req.query.ate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.ate) ? `${req.query.ate}T23:59:59.999Z` : null;
     const status = typeof req.query.status === 'string' && /^[a-z_]+$/.test(req.query.status) ? req.query.status : null;
-    res.render('devolucoes', { casos: db.listDevolucoes(userId, { from, to, status }), filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, statuses: ['opened', 'closed', 'shipped', 'delivered', 'not_delivered', 'cancelled'], ultimaSincronizacao: db.getDevolucoesSyncAt(userId) });
+    const casos = db.listDevolucoes(userId, { from, to, status }); const pedidos = db.listPedidos(userId, {});
+    const skuMap = new Map(); casos.forEach(c => (c.items || []).forEach(i => { const key = i.sku || 'não disponível'; const x = skuMap.get(key) || { sku: key, total: 0, motivos: new Map() }; x.total += Number(i.quantity) || 0; x.motivos.set(c.reason, (x.motivos.get(c.reason) || 0) + 1); skuMap.set(key, x); }));
+    const topSkus = [...skuMap.values()].sort((a,b) => b.total-a.total).slice(0,5).map(x => ({ sku:x.sku, total:x.total, motivo:[...x.motivos.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0] || 'não disponível' }));
+    const resumo = { quantidade: casos.filter(c => c.type === 'return').length, taxa: pedidos.length ? casos.filter(c => c.type === 'return').length / pedidos.length * 100 : null, custo: casos.reduce((s,c)=>s+(Number(c.real_cost)||0),0), topSkus };
+    res.render('devolucoes', { casos, resumo, filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, statuses: ['opened', 'closed', 'shipped', 'delivered', 'not_delivered', 'cancelled'], ultimaSincronizacao: db.getDevolucoesSyncAt(userId), syncWarning });
   });
-  app.post('/devolucoes/atualizar', requireLogin, async (req, res) => { await ml.syncDevolucoes(req.session.user_id, 90); res.redirect('/devolucoes'); });
+  app.get('/devolucoes.csv', requireLogin, (req, res) => { const rows = db.listDevolucoes(req.session.user_id, {}); const esc = v => `"${String(v ?? 'não disponível').replace(/"/g, '""')}"`; const head = ['pedido','data_venda','data_abertura','motivo','tipo','status','resolvido_por','reembolso','tarifa_devolvida','frete_retorno','outras_cobrancas','custo_real']; const lines = [head, ...rows.map(c => [c.order_id,c.sale_date,c.date_opened,c.reason,c.type,c.status,c.resolved_by,c.refund_amount,c.sale_fee_returned === true ? 'sim' : c.sale_fee_returned === false ? 'não' : 'não disponível',c.return_shipping_cost,c.other_charges,c.real_cost])].map(r => r.map(esc).join(';')); res.type('text/csv').set('Content-Disposition','attachment; filename="devolucoes.csv"').send('\ufeff' + lines.join('\r\n')); });
+  app.post('/devolucoes/atualizar', requireLogin, async (req, res) => { try { await ml.syncDevolucoes(req.session.user_id, 90); res.redirect('/devolucoes'); } catch (error) { if (error instanceof AppError && error.status === 429) return res.redirect('/devolucoes?rate_limited=1'); throw error; } });
   app.get('/api/vendas', requireLogin, async (req, res) => res.json(await ml.sales(req.session.user_id)));
   app.use((req, res, next) => next(new AppError('Página não encontrada.', 404)));
   app.use((error, req, res, next) => {

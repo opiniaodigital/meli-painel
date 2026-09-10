@@ -1,4 +1,4 @@
-export class AppError extends Error {
+﻿export class AppError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
 }
 
@@ -202,24 +202,30 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
   async function syncDevolucoes(userId, days = 90) {
     const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000); const rows = new Map();
     const range = `date_created:after:${start.toISOString()},before:${end.toISOString()}`;
+    const orderCache = new Map();
     for (const claimStatus of ['opened', 'closed']) {
       let offset = 0; let total = null;
       while (total === null || offset < total) {
       const query = new URLSearchParams({ status: claimStatus, range, sort: 'date_created:desc', limit: '30', offset: String(offset) });
-      const page = await api(userId, `/post-purchase/v1/claims/search?${query}`); total = page.paging?.total;
+      let page; for (let attempt = 0; attempt < 4; attempt++) { try { page = await api(userId, `/post-purchase/v1/claims/search?${query}`); break; } catch (error) { if (!(error instanceof AppError) || error.status !== 429 || attempt === 3) throw error; await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1))); } } total = page.paging?.total;
       if (!Array.isArray(page.data) || !Number.isFinite(total)) throw new AppError('A resposta de reclamações está incompleta.');
       for (const claim of page.data) {
         const claimId = String(claim.id); const orderId = String(claim.order_id || (claim.resource === 'order' ? claim.resource_id : '') || ''); let order = null; let returnInfo = null; let returnCost = 0;
-        try { if (orderId) order = await api(userId, `/orders/${encodeURIComponent(orderId)}`); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
-        if (claim.type === 'return' || claim.type === 'mediations' || claim.stage === 'claim' || claim.stage === 'dispute') {
-          try { returnInfo = await api(userId, `/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
+        try {
+          if (orderId) {
+            if (orderCache.has(orderId)) order = orderCache.get(orderId);
+            else { order = await api(userId, `/orders/${encodeURIComponent(orderId)}`); orderCache.set(orderId, order); }
+          }
+        } catch (error) { if (error instanceof AppError && error.status === 401) throw error; }
+        if (claim.type === 'return' || (claim.type === 'mediations' && claim.resource === 'shipment')) {
+          try { returnInfo = await api(userId, `/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`); } catch (error) { if (error instanceof AppError && error.status === 401) throw error; }
         }
-        try { const charge = await api(userId, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`); returnCost = Number(charge.amount) || 0; } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
+        if (claim.type === 'return' || returnInfo) { try { const charge = await api(userId, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`); returnCost = Number(charge.amount) || 0; } catch (error) { if (error instanceof AppError && error.status === 401) throw error; } }
         const shipment = returnInfo?.shipments?.[0]; const history = shipment?.status_history || returnInfo?.status_history || []; const delivered = shipment?.status === 'delivered' || returnInfo?.status === 'delivered';
         const latest = Array.isArray(history) && history.length ? history[history.length - 1] : null; const refunded = ['refunded', 'refund', 'closed'].some(value => String(claim.status || '').toLowerCase().includes(value)) || Boolean(claim.resolution?.type === 'refund');
         const sellerFee = (order?.order_items || []).reduce((sum, item) => sum + (Number(item.sale_fee) || 0) * (Number(item.quantity) || 0), 0); const refund = Number(returnInfo?.refund_amount || claim.refund_amount || order?.paid_amount || 0) || 0;
         const saleFeeReturned = refunded && sellerFee > 0 ? null : false;
-        rows.set(claimId, { claim_id: claimId, order_id: orderId || null, sale_date: order?.date_created || null, date_opened: claim.date_created || null, reason: claim.reason_id || claim.reason || 'não informado', type: claim.type || 'claim', status: returnInfo?.status || claim.status || null, stage: claim.stage || null, resolved_by: resolver(latest?.change_by || claim.resolution?.resolved_by), refunded, refund_amount: refund, sale_fee: sellerFee, sale_fee_returned: saleFeeReturned, return_shipping_cost: returnCost, other_charges: 0, return_shipment_status: shipment?.status || null, return_posted_at: shipment?.date_shipped || latest?.date || null, return_delivered_at: shipment?.date_delivered || (delivered ? latest?.date : null), product_received: delivered, destination: shipment?.destination?.name || null, real_cost: refund + returnCost + (saleFeeReturned === false ? sellerFee : 0) });
+        rows.set(claimId, { claim_id: claimId, order_id: orderId || null, sale_date: order?.date_created || null, date_opened: claim.date_created || null, reason: claim.reason_id || claim.reason || 'não informado', type: claim.type || 'claim', status: returnInfo?.status || claim.status || null, stage: claim.stage || null, resolved_by: resolver(latest?.change_by || claim.resolution?.resolved_by), refunded, refund_amount: refund, sale_fee: sellerFee, sale_fee_returned: saleFeeReturned, return_shipping_cost: returnCost, other_charges: 0, return_shipment_status: shipment?.status || null, return_posted_at: shipment?.date_shipped || latest?.date || null, return_delivered_at: shipment?.date_delivered || (delivered ? latest?.date : null), product_received: delivered, destination: shipment?.destination?.name || null, items: (order?.order_items || []).map(item => ({ sku: item.item?.seller_sku || item.item?.id || null, title: item.item?.title || null, quantity: Number(item.quantity) || 0 })), real_cost: refund + returnCost + (saleFeeReturned === false ? sellerFee : 0) });
       }
       offset += page.data.length; if (!page.data.length) break;
       }
@@ -229,3 +235,4 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
 
   return { exchangeToken, accessToken, api, sales, syncPedidos, syncMargens, syncDevolucoes };
 }
+
