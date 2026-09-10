@@ -200,10 +200,12 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
 
   const resolver = value => ({ buyer: 'comprador', seller: 'vendedor', respondent: 'vendedor', mediator: 'Mercado Livre', collector: 'Mercado Livre' }[String(value || '').toLowerCase()] || value || null);
   async function syncDevolucoes(userId, days = 90) {
-    const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000); const rows = []; let offset = 0; let total = null;
+    const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000); const rows = new Map();
     const range = `date_created:after:${start.toISOString()},before:${end.toISOString()}`;
-    while (total === null || offset < total) {
-      const query = new URLSearchParams({ range, sort: 'date_created:desc', limit: '30', offset: String(offset) });
+    for (const claimStatus of ['opened', 'closed']) {
+      let offset = 0; let total = null;
+      while (total === null || offset < total) {
+      const query = new URLSearchParams({ status: claimStatus, range, sort: 'date_created:desc', limit: '30', offset: String(offset) });
       const page = await api(userId, `/post-purchase/v1/claims/search?${query}`); total = page.paging?.total;
       if (!Array.isArray(page.data) || !Number.isFinite(total)) throw new AppError('A resposta de reclamações está incompleta.');
       for (const claim of page.data) {
@@ -217,11 +219,12 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
         const latest = Array.isArray(history) && history.length ? history[history.length - 1] : null; const refunded = ['refunded', 'refund', 'closed'].some(value => String(claim.status || '').toLowerCase().includes(value)) || Boolean(claim.resolution?.type === 'refund');
         const sellerFee = (order?.order_items || []).reduce((sum, item) => sum + (Number(item.sale_fee) || 0) * (Number(item.quantity) || 0), 0); const refund = Number(returnInfo?.refund_amount || claim.refund_amount || order?.paid_amount || 0) || 0;
         const saleFeeReturned = refunded && sellerFee > 0 ? null : false;
-        rows.push({ claim_id: claimId, order_id: orderId || null, sale_date: order?.date_created || null, date_opened: claim.date_created || null, reason: claim.reason_id || claim.reason || 'não informado', type: claim.type || 'claim', status: returnInfo?.status || claim.status || null, stage: claim.stage || null, resolved_by: resolver(latest?.change_by || claim.resolution?.resolved_by), refunded, refund_amount: refund, sale_fee: sellerFee, sale_fee_returned: saleFeeReturned, return_shipping_cost: returnCost, other_charges: 0, return_shipment_status: shipment?.status || null, return_posted_at: shipment?.date_shipped || latest?.date || null, return_delivered_at: shipment?.date_delivered || (delivered ? latest?.date : null), product_received: delivered, destination: shipment?.destination?.name || null, real_cost: refund + returnCost + (saleFeeReturned === false ? sellerFee : 0) });
+        rows.set(claimId, { claim_id: claimId, order_id: orderId || null, sale_date: order?.date_created || null, date_opened: claim.date_created || null, reason: claim.reason_id || claim.reason || 'não informado', type: claim.type || 'claim', status: returnInfo?.status || claim.status || null, stage: claim.stage || null, resolved_by: resolver(latest?.change_by || claim.resolution?.resolved_by), refunded, refund_amount: refund, sale_fee: sellerFee, sale_fee_returned: saleFeeReturned, return_shipping_cost: returnCost, other_charges: 0, return_shipment_status: shipment?.status || null, return_posted_at: shipment?.date_shipped || latest?.date || null, return_delivered_at: shipment?.date_delivered || (delivered ? latest?.date : null), product_received: delivered, destination: shipment?.destination?.name || null, real_cost: refund + returnCost + (saleFeeReturned === false ? sellerFee : 0) });
       }
       offset += page.data.length; if (!page.data.length) break;
+      }
     }
-    db.replaceDevolucoes(userId, rows); return { count: rows.length, from: start.toISOString(), to: end.toISOString() };
+    const normalized = [...rows.values()]; db.replaceDevolucoes(userId, normalized); return { count: normalized.length, from: start.toISOString(), to: end.toISOString() };
   }
 
   return { exchangeToken, accessToken, api, sales, syncPedidos, syncMargens, syncDevolucoes };
