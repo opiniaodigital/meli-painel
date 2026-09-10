@@ -33,6 +33,8 @@ export function createApp({ db, config, fetchImpl, now }) {
   });
   app.use(express.static(fileURLToPath(new URL('./public', import.meta.url))));
 
+  app.get('/mock-dashboard', (req, res) => res.render('mock-dashboard'));
+
   function newSession(res, values, maxAge) {
     const raw = random();
     db.saveSession(hash(raw), { ...values, expires_at: Date.now() + maxAge });
