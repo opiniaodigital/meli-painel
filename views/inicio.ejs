@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Painel Mercado Livre</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <header><a class="brand" href="/"><span class="mark" aria-hidden="true">M</span> Painel Mercado Livre</a><span class="tag">Seu negócio, em perspectiva</span></header>
+  <main class="home">
+    <section class="hero">
+      <span class="eyebrow">VISÃO GERAL DA SUA LOJA</span>
+      <h1>Suas vendas.<br>Mais claras.</h1>
+      <p>Veja o desempenho dos últimos 30 dias e descubra quais anúncios movimentam seu negócio.</p>
+      <div class="actions"><a class="button" href="/auth/mercadolivre">Conectar Mercado Livre <span aria-hidden="true">↗</span></a><% if (connected) { %><a class="button secondary" href="/painel">Abrir meu painel</a><% } %></div>
+      <p class="small">Você autoriza o acesso na página do Mercado Livre.</p>
+      <% if (!configured) { %><aside class="notice"><strong>Vamos começar?</strong> Preencha ML_APP_ID, ML_CLIENT_SECRET e ML_REDIRECT_URI no arquivo .env e reinicie o aplicativo para habilitar a conexão.</aside><% } %>
+    </section>
+    <section class="features" aria-label="O que você encontra no painel">
+      <div class="feature"><span class="feature-number">01</span><h2>Vendas em reais</h2><p>O valor dos pedidos pagos no período, em um só lugar.</p></div>
+      <div class="feature"><span class="feature-number">02</span><h2>Volume de pedidos</h2><p>Acompanhe quantos pedidos sua loja recebeu.</p></div>
+      <div class="feature"><span class="feature-number">03</span><h2>Seus 10 destaques</h2><p>Conheça os anúncios com mais unidades vendidas.</p></div>
+    </section>
+  </main>
+  <footer>Uma visão simples para acompanhar sua operação. · Integração independente com o Mercado Livre.</footer>
+</body></html>

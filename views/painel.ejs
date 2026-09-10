@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Visão geral · Painel Mercado Livre</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <header><a class="brand" href="/"><span class="mark" aria-hidden="true">M</span> Painel Mercado Livre</a><span class="status">Conta conectada</span></header>
+  <main>
+    <div class="page-heading"><div><span class="eyebrow">SEU NEGÓCIO EM NÚMEROS</span><h1>Visão geral</h1><p>Vendedor <%= data.vendedor_id %> · Últimos 30 dias</p></div><a class="button secondary" href="/painel">Atualizar dados ↻</a></div>
+    <div class="period"><%= date(data.periodo.de) %> — <%= date(data.periodo.ate) %> <span>Horário de Brasília</span></div>
+    <section class="metrics" aria-label="Resumo de vendas">
+      <article class="metric primary"><span>Total de vendas</span><strong><%= money(data.total_vendas) %></strong><small>Valor bruto dos pedidos pagos em reais</small></article>
+      <article class="metric"><span>Pedidos pagos</span><strong><%= data.quantidade_pedidos.toLocaleString('pt-BR') %></strong><small>Pedidos criados no período</small></article>
+    </section>
+    <section class="ranking"><div class="section-heading"><div><h2>Anúncios mais vendidos</h2><p>Seus 10 destaques por quantidade de unidades.</p></div><span class="badge">TOP 10</span></div>
+      <% if (!data.anuncios_mais_vendidos.length) { %><div class="empty"><h3>Nenhuma venda por aqui ainda</h3><p>Não encontramos pedidos pagos em reais nos últimos 30 dias. Quando houver vendas, elas aparecerão neste painel.</p></div><% } else { %>
+      <div class="table-scroll"><table><thead><tr><th scope="col">Posição</th><th scope="col">Anúncio</th><th scope="col" class="numeric">Unidades</th><th scope="col" class="numeric">Valor vendido</th></tr></thead><tbody>
+        <% data.anuncios_mais_vendidos.forEach((item, index) => { %><tr><td><span class="rank"><%= String(index + 1).padStart(2, '0') %></span></td><td><strong><%= item.titulo %></strong><small><%= item.id %></small></td><td class="numeric"><%= item.quantidade.toLocaleString('pt-BR') %></td><td class="numeric"><%= money(item.total_vendas) %></td></tr><% }) %>
+      </tbody></table></div><% } %>
+    </section>
+    <p class="footnote">Considera pedidos com status pago (paid) em BRL. Os valores não representam lucro líquido; taxas e reembolsos não são descontados. <a href="/api/vendas">Ver dados em JSON ↗</a></p>
+  </main><footer>Painel Mercado Livre · Dados consultados na sua conta</footer>
+</body></html>

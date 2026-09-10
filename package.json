@@ -1,0 +1,10 @@
+{
+  "name": "meli-painel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Painel Mercado Livre com Express, OAuth e SQLite",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node server.js", "dev": "node --watch server.js", "test": "node --test" },
+  "dependencies": { "dotenv": "^17.2.3", "ejs": "^3.1.10", "express": "^5.1.0" }
+}
