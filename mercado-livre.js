@@ -170,16 +170,30 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
 
   async function syncMargens(userId, days = 60) {
     const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
-    const rows = []; const seen = new Set(); let offset = 0; let total = null;
-    while (total === null || offset < total) {
-      const query = new URLSearchParams({ seller: String(userId), 'order.date_created.from': start.toISOString(), 'order.date_created.to': end.toISOString(), sort: 'date_asc', limit: '50', offset: String(offset) });
-      const page = await api(userId, `/orders/search?${query}`); total = page.paging?.total;
+    const queryStart = new Date(start.getTime() - 24 * 60 * 60 * 1000); const queryEnd = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+    const candidates = new Map();
+    async function collect(searchParams, cancelled = false) {
+      let offset = 0; let total = null;
+      while (total === null || offset < total) {
+        const query = new URLSearchParams({ seller: String(userId), ...searchParams, sort: 'date_desc', limit: '50', offset: String(offset) });
+        const page = await api(userId, `/orders/search?${query}`); total = page.paging?.total;
       if (!Array.isArray(page.results) || !Number.isFinite(total)) throw new AppError('A resposta de pedidos está incompleta.');
       if (!page.results.length && offset < total) throw new AppError('A consulta foi interrompida antes de carregar todos os pedidos.');
-      for (const searchOrder of page.results) {
-        const id = String(searchOrder.id); const created = Date.parse(searchOrder.date_created);
-        if (seen.has(id) || !Number.isFinite(created) || created < start.getTime() || created > end.getTime()) continue; seen.add(id);
-        const order = await api(userId, `/orders/${encodeURIComponent(id)}`);
+        for (const searchOrder of page.results) {
+          const id = String(searchOrder.id); if (!id || candidates.has(id) && !cancelled) continue;
+          candidates.set(id, { searchOrder, cancelled });
+        }
+        offset += page.results.length; if (!page.results.length) break;
+      }
+    }
+    await collect({ 'order.date_closed.from': queryStart.toISOString(), 'order.date_closed.to': queryEnd.toISOString() });
+    // Cancelled orders can disappear from a date_closed search after the status change.
+    await collect({ 'order.date_last_updated.from': queryStart.toISOString(), 'order.date_last_updated.to': queryEnd.toISOString(), 'order.status': 'cancelled' }, true);
+    const rows = [];
+    for (const { searchOrder, cancelled: fromCancelled } of candidates.values()) {
+        const id = String(searchOrder.id); const order = await api(userId, `/orders/${encodeURIComponent(id)}`);
+        const saleDate = Date.parse(order.date_closed || searchOrder.date_closed || order.date_created || searchOrder.date_created);
+        if (!Number.isFinite(saleDate) || saleDate < start.getTime() || saleDate > end.getTime()) continue;
         if (String(order.id) !== id || !Array.isArray(order.order_items)) throw new AppError('Um pedido retornou dados incompletos.');
         if (order.currency_id !== 'BRL') continue;
         if (order.order_items.some(line => !Number.isFinite(line.unit_price) || !Number.isInteger(line.quantity) || line.quantity <= 0)) throw new AppError('Um pedido retornou itens inválidos.');
@@ -194,15 +208,26 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
             const shipment = await api(userId, `/shipments/${encodeURIComponent(link.id)}`, { 'x-format-new': 'true' }); envioStatus = shipment.status || null; envioTipo = shipment.logistic_type || shipment.shipping_mode || null;
             const costs = await api(userId, `/shipments/${encodeURIComponent(link.id)}/costs`, { 'x-format-new': 'true' }); const sender = (costs.senders || []).find(value => String(value.user_id) === String(userId)); frete = Number(sender?.cost) || 0; freteDesconto = (sender?.discounts || []).reduce((sum, value) => sum + Number(value.promoted_amount || 0), 0);
             meta.shipment_id = String(link.id);
+            meta.pack_id = order.pack_id ? String(order.pack_id) : null;
             meta.frete_confirmado = Number.isFinite(sender?.cost) && !order.pack_id && !['self_service', 'custom', 'me1'].includes(envioTipo);
             meta.frete_comprador = !order.pack_id && Number.isFinite(costs.receiver?.cost) ? costs.receiver.cost : null;
             if (order.pack_id) meta.frete_motivo = 'Envio em pacote: rateio por conciliar';
           }
         } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
         let descontos = 0; try { const discounts = await api(userId, `/orders/${encodeURIComponent(id)}/discounts`); descontos = sumDiscounts(discounts); meta.desconto_confirmado = Array.isArray(discounts.details) && (discounts.details.length === 0 || order.order_items.every(line => Number.isFinite(line.gross_price))); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
-        rows.push({ order_id: id, date_created: new Date(order.date_created).toISOString(), buyer_nickname: order.buyer?.nickname || null, items, bruto, tarifas, frete, frete_desconto: freteDesconto, descontos, status: order.status || 'unknown', envio_status: envioStatus, envio_tipo: envioTipo, mc_meta: meta });
-      }
-      offset += page.results.length; if (!page.results.length) break;
+        rows.push({ order_id: id, date_created: new Date(saleDate).toISOString(), buyer_nickname: null, items, bruto, tarifas, frete, frete_desconto: freteDesconto, descontos, status: fromCancelled ? 'cancelled' : (order.status || 'unknown'), envio_status: envioStatus, envio_tipo: envioTipo, mc_meta: meta });
+    }
+    // A pack shares one shipment charge. The API repeats the full amount on every order;
+    // allocate it once across the pack by product value, preserving cents.
+    const packs = new Map();
+    for (const row of rows) if (row.mc_meta?.pack_id) (packs.get(row.mc_meta.pack_id) || packs.set(row.mc_meta.pack_id, []).get(row.mc_meta.pack_id)).push(row);
+    for (const packRows of packs.values()) {
+      const source = Math.max(...packRows.map(row => Number(row.frete) || 0));
+      if (!Number.isFinite(source) || source <= 0) continue;
+      const total = Math.round(source * 100); const weights = packRows.map(row => Math.max(0, Math.round((Number(row.bruto) || 0) * 100))); const denominator = weights.reduce((s,v) => s + v, 0);
+      const shares = weights.map((weight, index) => index === weights.length - 1 ? total - weights.slice(0,index).reduce((s,w,j) => s + Math.floor(total * w / Math.max(denominator,1)), 0) : Math.floor(total * weight / Math.max(denominator,1)));
+      let remainder = total - shares.reduce((s,v) => s + v, 0); for (let i = 0; remainder > 0; i = (i + 1) % shares.length, remainder--) shares[i]++;
+      packRows.forEach((row,index) => { row.frete = shares[index] / 100; row.mc_meta.frete_confirmado = true; row.mc_meta.frete_rateado = true; row.mc_meta.frete_comprador = null; });
     }
     db.replaceMargens(userId, rows); return { count: rows.length, from: start.toISOString(), to: end.toISOString() };
   }

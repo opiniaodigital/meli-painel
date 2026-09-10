@@ -53,6 +53,20 @@ export function installMcRoutes(app, { db, ml, bling, requireLogin, now = Date.n
   app.get('/api/mc/realtime', requireLogin, async (req, res) => {
     const data = await read(req); res.json({ ...publicDashboard(data), aviso: data.warning });
   });
+  app.get('/api/mc/resumo', requireLogin, async (req, res) => { const d = await read(req); res.json({ periodo:d.range, cards:d.totals, por_canal:d.byChannel, por_conta:d.byAccount, por_envio:d.byShipping, mensal:d.monthly, ontem:d.yesterday, hoje:d.today }); });
+  app.get('/api/mc/skus', requireLogin, async (req, res) => { const d = await read(req); res.json({ periodo:d.range, skus:d.ranking }); });
+  app.get('/api/mc/ranking', requireLogin, async (req, res) => { const d = await read(req); res.json({ periodo:d.range, visao:req.query.ordem || 'margin', agrupamento:req.query.grupo || 'sku', ranking:d.ranking }); });
+  app.get('/api/mc/ranking-full', requireLogin, async (req, res) => { const d = await read(req); res.json({ periodo:d.range, visoes:['margin','percent','revenue','units','abc'], agrupamento:req.query.group || 'sku', total:d.ranking.length, ranking:d.ranking }); });
+  app.get('/api/mc/ritmo', requireLogin, async (req, res) => { const d = await read(req); res.json({ periodo:d.range, dias:d.daily }); });
+  app.get('/api/mc/decisoes', requireLogin, async (req, res) => { const d = await read(req); const decisoes=d.ranking.slice(0,100).map(row=>({sku:row.sku,id:row.id,titulo:row.title,acao:row.pct===null?'completar_dados':row.pct<20?'rever_preco':row.pct>=25?'forcar_venda':'acompanhar',mc_percentual:row.pct,unidades:row.qty})); res.json({ periodo:d.range, decisoes }); });
+  app.get('/api/mc/por-sku', requireLogin, async (req, res) => { const d = await read(req); const wanted=String(req.query.sku || ''); res.json({ periodo:d.range, sku:d.ranking.find(row=>row.sku===wanted) || null }); });
+  app.get('/api/mc/faixas', requireLogin, async (req, res) => { const d = await read(req); const wanted=String(req.query.sku || ''); const group=d.ranking.find(row=>row.sku===wanted || row.id===wanted); if(!group) return res.status(404).json({erro:'SKU não encontrado no período.'}); res.json({ periodo:d.range, sku:wanted, faixas:priceBands(group,d.range.days) }); });
+  app.get('/api/mc/custo-manual', requireLogin, async (req, res) => { const d=await read(req); res.json({ sem_custo:d.missingCosts, custos:db.listCustos() }); });
+  app.get('/api/mc/comissoes', requireLogin, (req, res) => res.json({ fonte:'Mercado Livre: tarifa real do pedido; Bling/ERP: percentual configurado por canal', configuracoes:db.getBlingSettings(req.session.user_id).commissions || {} }));
+  app.get('/api/mc/frete-proprio', requireLogin, (req, res) => res.json({ habilitado:false, fonte:null, prioridade:['cte_real','fatura_transportadora','cotacao','tabela_manual'], cobertura:0, aviso:'CT-e, faturas e cotações de transportadoras ainda não estão conectados.' }));
+  app.get('/api/mc/frete-proprio-analise', requireLogin, (req, res) => res.json({ dias:Number(req.query.dias) || 30, transportadoras:[], por_produto:[], destinos_caros:[], tendencia:[], cobertura:0, aviso:'Análise indisponível até conectar as fontes de frete próprio.' }));
+  app.get('/api/mc/frete-cte', requireLogin, (req, res) => res.json({ habilitado:false, fonte_cte:false, recebidos:0, casados:0, aviso:'A integração SEFAZ/CT-e ainda não foi configurada.' }));
+  app.post('/api/mc/realtime-run', requireLogin, guard, async (req, res) => { const days=Math.min(365,Math.max(1,Number(req.body.dias) || 65)); const result=await sync(req.session.user_id,true,days); if(bling) await bling.sync(req.session.user_id,days); res.json({ok:true,resultado:result,ultima_sincronizacao:db.getMargemSyncAt(req.session.user_id)}); });
   app.post('/mc/atualizar', requireLogin, guard, async (req, res) => {
     const range = period(req.body, now());
     const days = Math.max(65, Math.ceil((now() - range.from) / 86400000) + 1);

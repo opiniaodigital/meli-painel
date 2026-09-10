@@ -108,12 +108,13 @@ function rank(rows, grouping = 'sku') {
 }
 
 export function buildDashboard({ rows, costs, query = {}, now = Date.now(), sync }) {
-  const range = period(query, now);
-  const tab = ['live', 'analysis', 'prices', 'ranking'].includes(query.aba) ? query.aba : 'live';
-  const includeBuyer = query.frete_comprador === '1';
-  const shipping = String(query.envio || '');
-  const channel = String(query.canal || '');
-  const account = String(query.conta || '');
+  const normalized = { ...query, envio: query.envio || query.modalidade || '', faixa: query.faixa || query.mc_faixa || '', pagina: query.pagina || query.pag || '' };
+  const range = period(normalized, now);
+  const tab = ['live', 'analysis', 'prices', 'ranking'].includes(normalized.aba) ? normalized.aba : 'live';
+  const includeBuyer = normalized.frete_comprador === '1';
+  const shipping = String(normalized.envio || '');
+  const channel = String(normalized.canal || '');
+  const account = String(normalized.conta || '');
   const costMap = new Map(costs.map(row => [row.sku, row]));
   const all = rows.map(row => {
     const result = calculate(row, costMap);
@@ -145,21 +146,21 @@ export function buildDashboard({ rows, costs, query = {}, now = Date.now(), sync
   monthly.previousClosed = aggregate(between(previousMonth, previousMonth + comparableDays * DAY - 1).filter(row => approved(row.status))).revenue;
   const yesterday = aggregate(between(todayStart - DAY, now - DAY).filter(row => approved(row.status) && row.datePrecision === 'time'));
   const today = aggregate(between(todayStart, now).filter(row => approved(row.status) && row.datePrecision === 'time'));
-  const search = String(query.q || '').trim().toLowerCase().slice(0, 200);
-  const band = String(query.faixa || '');
+  const search = String(normalized.q || '').trim().toLowerCase().slice(0, 200);
+  const band = String(normalized.faixa || '');
   const matchesBand = pct => !band || (band === 'missing' ? pct === null : pct !== null && (band === 'low' ? pct < 20 : band === 'high' ? pct >= 25 : pct >= Number(band) && pct < Number(band) + 1));
   let tableRows = paid.filter(row => (!search || [row.id, ...row.lines.flatMap(l => [l.sku, l.id, l.title])].join(' ').toLowerCase().includes(search)) && matchesBand(row.mc === null || !row.revenue ? null : 100 * row.mc / row.revenue));
   if (query.custo === 'missing') tableRows = tableRows.filter(r => r.reasons.includes('Custo ausente'));
   const pages = Math.max(1, Math.ceil(tableRows.length / 800));
-  const page = Math.min(pages, Math.max(1, Number.parseInt(query.pagina, 10) || 1));
-  const orderKey = { margin: 'mc', percent: 'pct', revenue: 'revenue', units: 'qty', abc: 'mc' }[query.ordem] || 'mc';
-  const ranking = grouped.filter(g => (!search || `${g.sku} ${g.id} ${g.title}`.toLowerCase().includes(search)) && (query.custo !== 'missing' || g.lines.some(l => l.cost === null))).sort((a,b) => (b[orderKey] ?? -Infinity) - (a[orderKey] ?? -Infinity));
+  const page = Math.min(pages, Math.max(1, Number.parseInt(normalized.pagina, 10) || 1));
+  const orderKey = { margin: 'mc', percent: 'pct', revenue: 'revenue', units: 'qty', abc: 'mc' }[normalized.ordem] || 'mc';
+  const ranking = grouped.filter(g => (!search || `${g.sku} ${g.id} ${g.title}`.toLowerCase().includes(search)) && (normalized.custo !== 'missing' || g.lines.some(l => l.cost === null))).sort((a,b) => (b[orderKey] ?? -Infinity) - (a[orderKey] ?? -Infinity));
   const byShipping = [...new Set(paid.map(r => r.shippingType))].map(type => ({ type, ...aggregate(paid.filter(r => r.shippingType === type)) }));
   const byChannel = [...new Set(paid.map(r=>r.channel))].map(channel=>({channel,...aggregate(paid.filter(r=>r.channel===channel))}));
   const byAccount = [...new Set(paid.map(r=>r.account))].map(account=>({account,name:paid.find(r=>r.account===account).accountName,...aggregate(paid.filter(r=>r.account===account))}));
   const daily = [];
   for (let start = range.from; start <= range.to; start += DAY) daily.push({ day: localDay(start), ...aggregate(between(start, Math.min(start + DAY - 1, range.to)).filter(r => approved(r.status))) });
-  return { range, tab, includeBuyer, totals, cancelled: selected.filter(r => r.status === 'cancelled').length, pending: selected.filter(r => !approved(r.status) && r.status !== 'cancelled').length, monthly, yesterday, today, daily, ranking, topRevenue: [...grouped].sort((a,b) => b.revenue-a.revenue).slice(0,5), topUnits: [...grouped].sort((a,b) => b.qty-a.qty).slice(0,5), byChannel, byAccount, channels:[...new Set(['mercado_livre',...all.map(r=>r.channel)])], accountLabels:Object.fromEntries(all.map(r=>[r.account,r.accountName])), byShipping, rows: tableRows.slice((page-1)*800,page*800), rowCount: tableRows.length, pages, page, query, sync, shippingOptions: [...new Set(all.map(r => r.shippingType))].sort(), accounts: [...new Set(all.map(r => r.account))], missingCosts: [...new Set(paid.flatMap(r => r.lines.filter(l => l.cost === null && l.sku).map(l => l.sku)))], unknownBuyerShipping: includeBuyer && paid.some(r => r.buyerShipping === null), historyStart: rows.length ? rows.map(r => r.date_created).sort()[0] : null };
+  return { range, tab, includeBuyer, totals, cancelled: selected.filter(r => r.status === 'cancelled').length, pending: selected.filter(r => !approved(r.status) && r.status !== 'cancelled').length, monthly, yesterday, today, daily, ranking, topRevenue: [...grouped].sort((a,b) => b.revenue-a.revenue).slice(0,5), topUnits: [...grouped].sort((a,b) => b.qty-a.qty).slice(0,5), byChannel, byAccount, channels:[...new Set(['mercado_livre',...all.map(r=>r.channel)])], accountLabels:Object.fromEntries(all.map(r=>[r.account,r.accountName])), byShipping, rows: tableRows.slice((page-1)*800,page*800), rowCount: tableRows.length, pages, page, query:normalized, sync, shippingOptions: [...new Set(all.map(r => r.shippingType))].sort(), accounts: [...new Set(all.map(r => r.account))], missingCosts: [...new Set(paid.flatMap(r => r.lines.filter(l => l.cost === null && l.sku).map(l => l.sku)))], unknownBuyerShipping: includeBuyer && paid.some(r => r.buyerShipping === null), historyStart: rows.length ? rows.map(r => r.date_created).sort()[0] : null };
 }
 
 export function priceBands(group, days) {
@@ -175,5 +176,5 @@ export function priceBands(group, days) {
 
 export function publicDashboard(data) {
   const t = data.totals;
-  return { periodo: { de: data.range.di, ate: data.range.df, timezone: 'America/Sao_Paulo' }, cards: { vendas_aprovadas: t.count, valor_produto: reais(t.revenue), mc: reais(t.mc), mc_percentual: t.pct, custo: reais(t.cost), imposto: reais(t.tax), tarifas: reais(t.fee), frete: reais(t.shipping), canceladas: data.cancelled, pendentes: data.pending, mc_incompleta: t.incomplete }, vendas: data.rows.map(r => ({ order_id: r.id, date_created: r.date, canal: r.channel, conta: r.account, valor_produto: reais(r.revenue), mc: reais(r.mc), pendencias: r.reasons, skus: r.lines.map(l => l.sku) })), pagina: data.page, paginas: data.pages, total: data.rowCount, ultima_sincronizacao: data.sync, conciliado: false };
+  return { periodo: { de: data.range.di, ate: data.range.df, timezone: 'America/Sao_Paulo' }, cards: { vendas_aprovadas: t.count, valor_produto: reais(t.revenue), mc: reais(t.mc), mc_percentual: t.pct, custo: reais(t.cost), imposto: reais(t.tax), tarifas: reais(t.fee), frete: reais(t.shipping), frete_comprador: reais(t.buyerShipping), descontos: reais(t.discount), devolucoes: reais(t.refund), canceladas: data.cancelled, pendentes: data.pending, mc_incompleta: t.incomplete }, por_canal: data.byChannel.map(row=>({ ...row, receita:reais(row.revenue), mc:reais(row.mc) })), por_conta:data.byAccount.map(row=>({ ...row, receita:reais(row.revenue), mc:reais(row.mc) })), por_envio:data.byShipping.map(row=>({ ...row, receita:reais(row.revenue), mc:reais(row.mc) })), top_skus:data.topRevenue.map(row=>({ ...row, receita:reais(row.revenue), mc:reais(row.mc) })), vendas: data.rows.map(r => ({ order_id: r.id, date_created: r.date, data_precisao:r.datePrecision, canal: r.channel, conta: r.account, valor_produto: reais(r.revenue), mc: reais(r.mc), pendencias: r.reasons, skus: r.lines.map(l => l.sku), frete_auditoria:r.freightAudit || 'indisponível' })), pagina: data.page, paginas: data.pages, total: data.rowCount, ultima_sincronizacao: data.sync, conciliado: false };
 }

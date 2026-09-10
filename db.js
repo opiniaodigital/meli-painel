@@ -4,7 +4,7 @@ export function openDatabase(filename) {
   const db = new DatabaseSync(filename);
   db.exec(`
     PRAGMA journal_mode = WAL;
-    PRAGMA busy_timeout = 5000;
+    PRAGMA busy_timeout = 30000;
     CREATE TABLE IF NOT EXISTS vendedores (
       user_id TEXT PRIMARY KEY,
       access_token TEXT NOT NULL,

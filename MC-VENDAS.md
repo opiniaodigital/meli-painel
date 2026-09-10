@@ -7,12 +7,14 @@ Implementação local baseada no manual `instrucoes_mc_vendas.pdf` (20/08/2026).
 - `/promocao/mc`: entrada pelo painel, no menu Promoção.
 - `/mc`: monitor sem cabeçalho de navegação.
 - `/api/mc/realtime`: resposta JSON autenticada, sem comprador ou credenciais.
+- Endpoints auxiliares: `/api/mc/resumo`, `/api/mc/skus`, `/api/mc/faixas`, `/api/mc/ranking`, `/api/mc/ranking-full`, `/api/mc/ritmo`, `/api/mc/decisoes`, `/api/mc/por-sku`, `/api/mc/custo-manual`, `/api/mc/comissoes`, `/api/mc/frete-proprio`, `/api/mc/frete-proprio-analise` e `/api/mc/frete-cte`.
 - `/integracoes/bling`: instruções de cadastro, conexão OAuth, importação, mapeamento de lojas/situações e comissões estimadas.
 - Quatro abas: Ao vivo, Análise, Preços e Ranking.
 - Períodos Hoje, Ontem, Mês atual, Mês anterior e Personalizado; calendário em America/Sao_Paulo (UTC-03 para as datas atuais).
 - Filtros de conta, canal disponível, envio, pedido, produto e faixas de MC. Ranking por SKU ou MLB, cinco ordenações e classificação ABC sobre MC positiva. As lojas do Bling ficam vinculadas à sessão do vendedor que autorizou o ERP.
 - Tela revisada a cada 60 segundos; pausa quando oculta, durante edição ou com simulador/cadastro aberto. A coleta é verificada ao carregar a tela e renovada após cinco minutos. Não existe um agendador independente do acesso ao painel.
 - Atualizar agora força a coleta e permite buscar o intervalo personalizado (até 366 dias). Coletas simultâneas do módulo compartilham a mesma execução.
+- A coleta do Mercado Livre usa `date_closed` com janela de tolerância e faz uma segunda busca por `date_last_updated` para recuperar canceladas que deixaram de aparecer pela data de fechamento. Canceladas prevalecem na deduplicação. Pedidos em um mesmo `pack_id` têm o custo único de envio rateado por valor dos produtos, preservando centavos.
 - Custo manual por SKU aplica os valores no momento da consulta, recalculando o histórico. O cadastro de custos existente é compartilhado pelo aplicativo; não representa custos independentes por conta.
 
 ## Cálculo e qualidade
