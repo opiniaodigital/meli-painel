@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MC Vendas</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="container"><p><a href="/painel">← Painel</a></p><h1>MC Vendas</h1>
+<p>Última sincronização: <%= ultimaSincronizacao ? date(ultimaSincronizacao) : 'não disponível' %></p>
+<section class="metrics"><article class="metric"><span>Vendas aprovadas</span><strong><%= cards.vendas %></strong></article><article class="metric"><span>Valor dos produtos</span><strong><%= money(cards.valor) %></strong></article><article class="metric primary"><span>MC</span><strong><%= money(cards.mc) %></strong></article><article class="metric"><span>MC %</span><strong><%= cards.percentual.toFixed(2) %>%</strong></article></section>
+<h2>Vendas recentes</h2><table><thead><tr><th>Pedido</th><th>Data</th><th>Valor</th><th>MC</th><th>MC %</th></tr></thead><tbody><% rows.forEach(row => { %><tr><td><%= row.order_id %></td><td><%= date(row.date_created) %></td><td><%= money(row.valor) %></td><td><%= money(row.mc) %></td><td><%= row.mc_percentual === null ? 'sem custo' : row.mc_percentual.toFixed(2) + '%' %></td></tr><% }) %></tbody></table></main></body></html>
