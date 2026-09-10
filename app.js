@@ -120,6 +120,15 @@ export function createApp({ db, config, fetchImpl, now }) {
     res.render('margem', { pedidos, totals, ranking, filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, statuses: ['confirmed', 'paid', 'cancelled', 'partially_refunded', 'pending_cancel'], ultimaSincronizacao: db.getMargemSyncAt(userId) });
   });
   app.post('/margem/atualizar', requireLogin, async (req, res) => { await ml.syncMargens(req.session.user_id, 60); res.redirect('/margem'); });
+  app.get('/devolucoes', requireLogin, async (req, res) => {
+    const userId = req.session.user_id; const lastSync = db.getDevolucoesSyncAt(userId);
+    if (!lastSync || lastSync < Date.now() - 60 * 60 * 1000) await ml.syncDevolucoes(userId, 90);
+    const from = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? `${req.query.de}T00:00:00.000Z` : null;
+    const to = typeof req.query.ate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.ate) ? `${req.query.ate}T23:59:59.999Z` : null;
+    const status = typeof req.query.status === 'string' && /^[a-z_]+$/.test(req.query.status) ? req.query.status : null;
+    res.render('devolucoes', { casos: db.listDevolucoes(userId, { from, to, status }), filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, statuses: ['opened', 'closed', 'shipped', 'delivered', 'not_delivered', 'cancelled'], ultimaSincronizacao: db.getDevolucoesSyncAt(userId) });
+  });
+  app.post('/devolucoes/atualizar', requireLogin, async (req, res) => { await ml.syncDevolucoes(req.session.user_id, 90); res.redirect('/devolucoes'); });
   app.get('/api/vendas', requireLogin, async (req, res) => res.json(await ml.sales(req.session.user_id)));
   app.use((req, res, next) => next(new AppError('Página não encontrada.', 404)));
   app.use((error, req, res, next) => {

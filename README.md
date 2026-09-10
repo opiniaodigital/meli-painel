@@ -30,6 +30,10 @@ Página local: **http://localhost:3000**. Clique em **Conectar Mercado Livre** p
 
 - `/`: página inicial; `/auth/mercadolivre`: início do OAuth; `/callback`: retorno da autorização.
 - `/pedidos`: tabela dos pedidos dos últimos 60 dias, com filtros de período/status e botão de sincronização; os dados ficam em cache no SQLite por até uma hora.
+- `/devolucoes`: reclamações, mediações e devoluções dos últimos 90 dias, com retorno, custos e destaque para reembolso sem mercadoria confirmada.
+- `/custos` e `/margem`: custos por SKU e análise de rentabilidade.
+
+A rota de pós-venda usa `/post-purchase/v1/claims/search`, `/post-purchase/v2/claims/{claim_id}/returns` e `/post-purchase/v1/claims/{claim_id}/charges/return-cost`. O custo do retorno vem da cobrança informada pelo Mercado Livre; a tarifa de venda só é marcada como devolvida quando a API confirma. A disponibilidade de data de entrega, comprador e cobranças adicionais depende dos campos retornados para cada caso.
 - `/painel`: vendas e pedidos pagos em BRL criados nos últimos 30 dias corridos; top 10 por unidades, agrupando variações do mesmo anúncio.
 - `/api/vendas`: mesmos indicadores em JSON, com a sessão autenticada do navegador (sem expor tokens).
 

@@ -16,6 +16,6 @@
         <% data.anuncios_mais_vendidos.forEach((item, index) => { %><tr><td><span class="rank"><%= String(index + 1).padStart(2, '0') %></span></td><td><strong><%= item.titulo %></strong><small><%= item.id %></small></td><td class="numeric"><%= item.quantidade.toLocaleString('pt-BR') %></td><td class="numeric"><%= money(item.total_vendas) %></td></tr><% }) %>
       </tbody></table></div><% } %>
     </section>
-    <p class="footnote"><a href="/pedidos">Ver todos os pedidos</a><br>Considera pedidos com status pago (paid) em BRL. Os valores não representam lucro líquido; taxas e reembolsos não são descontados. <a href="/api/vendas">Ver dados em JSON ↗</a></p>
+    <p class="footnote"><a href="/pedidos">Ver todos os pedidos</a> · <a href="/devolucoes">Ver devoluções</a><br>Considera pedidos com status pago (paid) em BRL. Os valores não representam lucro líquido; taxas e reembolsos não são descontados. <a href="/api/vendas">Ver dados em JSON ↗</a></p>
   </main><footer>Painel Mercado Livre · Dados consultados na sua conta</footer>
 </body></html>

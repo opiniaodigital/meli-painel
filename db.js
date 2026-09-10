@@ -31,6 +31,10 @@ export function openDatabase(filename) {
       envio_status TEXT, envio_tipo TEXT, updated_at INTEGER NOT NULL,
       PRIMARY KEY (user_id, order_id)
     );
+    CREATE TABLE IF NOT EXISTS devolucoes (
+      user_id TEXT NOT NULL, claim_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, claim_id)
+    );
     CREATE TABLE IF NOT EXISTS pedidos (
       user_id TEXT NOT NULL,
       order_id TEXT NOT NULL,
@@ -77,6 +81,20 @@ export function openDatabase(filename) {
       let sql = 'SELECT * FROM margens_pedido WHERE user_id = ?'; const args = [String(userId)];
       if (from) { sql += ' AND date_created >= ?'; args.push(from); } if (to) { sql += ' AND date_created <= ?'; args.push(to); } if (status) { sql += ' AND status = ?'; args.push(status); }
       return db.prepare(sql + ' ORDER BY date_created DESC, order_id DESC').all(...args).map(row => ({ ...row, items: JSON.parse(row.items_json) }));
+    },
+    getDevolucoesSyncAt: userId => db.prepare('SELECT MAX(updated_at) AS updated_at FROM devolucoes WHERE user_id = ?').get(String(userId))?.updated_at ?? null,
+    replaceDevolucoes(userId, rows) {
+      const id = String(userId); const updated = Date.now(); db.exec('BEGIN IMMEDIATE');
+      try {
+        const save = db.prepare('INSERT INTO devolucoes (user_id,claim_id,payload_json,updated_at) VALUES (?,?,?,?) ON CONFLICT(user_id,claim_id) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at');
+        for (const row of rows) save.run(id, row.claim_id, JSON.stringify(row), updated);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
+    listDevolucoes: (userId, { from, to, status } = {}) => {
+      let sql = 'SELECT payload_json FROM devolucoes WHERE user_id = ?'; const args = [String(userId)];
+      const rows = db.prepare(sql).all(...args).map(row => JSON.parse(row.payload_json));
+      return rows.filter(row => (!from || row.date_opened >= from) && (!to || row.date_opened <= to) && (!status || row.status === status)).sort((a, b) => String(b.date_opened).localeCompare(String(a.date_opened)));
     },
     getPedidosSyncAt: userId => db.prepare('SELECT MAX(updated_at) AS updated_at FROM pedidos WHERE user_id = ?').get(String(userId))?.updated_at ?? null,
     replacePedidos(userId, orders) {
