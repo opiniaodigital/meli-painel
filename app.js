@@ -74,7 +74,7 @@ export function createApp({ db, config, fetchImpl, now }) {
     if (req.path.startsWith('/api/')) return res.status(401).json({ erro: 'Conecte sua conta do Mercado Livre para continuar.' });
     res.redirect('/');
   };
-  app.get('/painel', requireLogin, async (req, res) => res.render('painel', { data: await ml.sales(req.session.user_id) }));
+  app.get('/painel', requireLogin, async (req, res) => res.render('dashboard', { data: await ml.sales(req.session.user_id) }));
   app.get('/pedidos', requireLogin, async (req, res) => {
     const userId = req.session.user_id;
     const lastSync = db.getPedidosSyncAt(userId);
