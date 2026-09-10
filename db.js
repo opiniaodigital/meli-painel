@@ -18,6 +18,19 @@ export function openDatabase(filename) {
       verifier TEXT,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS custos_sku (
+      sku TEXT PRIMARY KEY,
+      custo_unitario REAL NOT NULL CHECK (custo_unitario >= 0),
+      imposto_percentual REAL NOT NULL DEFAULT 0 CHECK (imposto_percentual >= 0),
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS margens_pedido (
+      user_id TEXT NOT NULL, order_id TEXT NOT NULL, date_created TEXT NOT NULL,
+      buyer_nickname TEXT, items_json TEXT NOT NULL, bruto REAL NOT NULL, tarifas REAL NOT NULL,
+      frete REAL NOT NULL, frete_desconto REAL NOT NULL, descontos REAL NOT NULL, status TEXT NOT NULL,
+      envio_status TEXT, envio_tipo TEXT, updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, order_id)
+    );
     CREATE TABLE IF NOT EXISTS pedidos (
       user_id TEXT NOT NULL,
       order_id TEXT NOT NULL,
@@ -48,6 +61,23 @@ export function openDatabase(filename) {
       db.prepare('INSERT INTO sessoes VALUES (?, ?, ?, ?, ?)').run(id, user_id, state, verifier, expires_at);
     },
     deleteSession: id => db.prepare('DELETE FROM sessoes WHERE id = ?').run(id),
+    listCustos: () => db.prepare('SELECT sku, custo_unitario, imposto_percentual FROM custos_sku ORDER BY sku').all(),
+    upsertCusto: (sku, custo, imposto) => db.prepare(`INSERT INTO custos_sku (sku,custo_unitario,imposto_percentual,updated_at) VALUES (?,?,?,?) ON CONFLICT(sku) DO UPDATE SET custo_unitario=excluded.custo_unitario, imposto_percentual=excluded.imposto_percentual, updated_at=excluded.updated_at`).run(sku, custo, imposto, Date.now()),
+    deleteCusto: sku => db.prepare('DELETE FROM custos_sku WHERE sku = ?').run(sku),
+    getMargemSyncAt: userId => db.prepare('SELECT MAX(updated_at) AS updated_at FROM margens_pedido WHERE user_id = ?').get(String(userId))?.updated_at ?? null,
+    replaceMargens(userId, rows) {
+      const id = String(userId); const updated = Date.now(); db.exec('BEGIN IMMEDIATE');
+      try {
+        const save = db.prepare(`INSERT INTO margens_pedido (user_id,order_id,date_created,buyer_nickname,items_json,bruto,tarifas,frete,frete_desconto,descontos,status,envio_status,envio_tipo,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,order_id) DO UPDATE SET date_created=excluded.date_created,buyer_nickname=excluded.buyer_nickname,items_json=excluded.items_json,bruto=excluded.bruto,tarifas=excluded.tarifas,frete=excluded.frete,frete_desconto=excluded.frete_desconto,descontos=excluded.descontos,status=excluded.status,envio_status=excluded.envio_status,envio_tipo=excluded.envio_tipo,updated_at=excluded.updated_at`);
+        for (const row of rows) save.run(id,row.order_id,row.date_created,row.buyer_nickname,JSON.stringify(row.items),row.bruto,row.tarifas,row.frete,row.frete_desconto,row.descontos,row.status,row.envio_status,row.envio_tipo,updated);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+    },
+    listMargens: (userId, { from, to, status } = {}) => {
+      let sql = 'SELECT * FROM margens_pedido WHERE user_id = ?'; const args = [String(userId)];
+      if (from) { sql += ' AND date_created >= ?'; args.push(from); } if (to) { sql += ' AND date_created <= ?'; args.push(to); } if (status) { sql += ' AND status = ?'; args.push(status); }
+      return db.prepare(sql + ' ORDER BY date_created DESC, order_id DESC').all(...args).map(row => ({ ...row, items: JSON.parse(row.items_json) }));
+    },
     getPedidosSyncAt: userId => db.prepare('SELECT MAX(updated_at) AS updated_at FROM pedidos WHERE user_id = ?').get(String(userId))?.updated_at ?? null,
     replacePedidos(userId, orders) {
       const id = String(userId); const updated = Date.now();

@@ -12,6 +12,7 @@ export function createApp({ db, config, fetchImpl, now }) {
   const secure = config.ML_REDIRECT_URI?.startsWith('https://');
   const cookie = { httpOnly: true, sameSite: 'lax', secure: Boolean(secure), path: '/' };
   app.disable('x-powered-by');
+  app.use(express.urlencoded({ extended: false, limit: '1mb' }));
   app.set('view engine', 'ejs');
   app.set('views', fileURLToPath(new URL('./views', import.meta.url)));
   app.use((req, res, next) => {
@@ -79,6 +80,46 @@ export function createApp({ db, config, fetchImpl, now }) {
     res.render('pedidos', { pedidos, filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, ultimaSincronizacao: db.getPedidosSyncAt(userId), statuses: ['confirmed', 'paid', 'cancelled', 'partially_refunded', 'pending_cancel'] });
   });
   app.post('/pedidos/atualizar', requireLogin, async (req, res) => { await ml.syncPedidos(req.session.user_id, 60); res.redirect('/pedidos'); });
+  app.get('/custos', requireLogin, (req, res) => res.render('custos', { custos: db.listCustos(), erro: null }));
+  app.post('/custos', requireLogin, (req, res) => {
+    try {
+      const csv = String(req.body.csv || '');
+      if (csv.trim()) for (const [index, line] of csv.split(/\r?\n/).entries()) {
+        if (!line.trim() || index === 0 && /^\s*sku\s*;/i.test(line)) continue;
+        const [rawSku, rawCost, rawTax] = line.split(';').map(value => value?.trim());
+        const sku = rawSku; const cost = Number(String(rawCost || '').replace(/\./g, '').replace(',', '.')); const tax = Number(String(rawTax || '0').replace(',', '.'));
+        if (!sku || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(tax) || tax < 0) throw new Error(`Linha ${index + 1} inválida.`);
+        db.upsertCusto(sku, cost, tax);
+      }
+      if (req.body.sku) {
+        const cost = Number(String(req.body.custo || '').replace(',', '.')); const tax = Number(String(req.body.imposto || '0').replace(',', '.'));
+        if (!String(req.body.sku).trim() || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(tax) || tax < 0) throw new Error('Valores inválidos.');
+        db.upsertCusto(String(req.body.sku).trim(), cost, tax);
+      }
+      if (req.body.excluir) db.deleteCusto(String(req.body.excluir));
+      res.redirect('/custos');
+    } catch (error) { res.status(400).render('custos', { custos: db.listCustos(), erro: error.message }); }
+  });
+  app.get('/margem', requireLogin, async (req, res) => {
+    const userId = req.session.user_id; const lastSync = db.getMargemSyncAt(userId);
+    if (!lastSync || lastSync < Date.now() - 60 * 60 * 1000) await ml.syncMargens(userId, 60);
+    const from = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? `${req.query.de}T00:00:00.000Z` : null;
+    const to = typeof req.query.ate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.ate) ? `${req.query.ate}T23:59:59.999Z` : null;
+    const status = typeof req.query.status === 'string' && /^[a-z_]+$/.test(req.query.status) ? req.query.status : null;
+    const custos = new Map(db.listCustos().map(row => [row.sku, row]));
+    const pedidos = db.listMargens(userId, { from, to, status }).map(row => {
+      let custo = 0; let impostos = 0; let completo = true;
+      for (const item of row.items) { const price = custos.get(item.sku); if (!price) { completo = false; continue; } custo += price.custo_unitario * item.quantity; impostos += item.gross_price * price.imposto_percentual / 100; }
+      const receita = row.bruto - row.tarifas - row.frete - row.descontos; const margem = completo ? receita - custo - impostos : null;
+      return { ...row, receita, custo, impostos, margem, margem_percentual: margem === null || !row.bruto ? null : margem / row.bruto * 100, sem_custo: !completo };
+    });
+    const complete = pedidos.filter(row => row.margem !== null); const totals = ['bruto', 'tarifas', 'frete', 'descontos', 'custo', 'impostos'].reduce((out, key) => ({ ...out, [key]: complete.reduce((sum, row) => sum + row[key], 0) }), {});
+    totals.receita = totals.bruto - totals.tarifas - totals.frete - totals.descontos; totals.margem = complete.reduce((sum, row) => sum + row.margem, 0); totals.margem_percentual = totals.bruto ? totals.margem / totals.bruto * 100 : 0;
+    const rank = new Map(); for (const row of complete) for (const item of row.items) { const price = custos.get(item.sku); if (!price) continue; const value = rank.get(item.sku) || { sku: item.sku, titulo: item.title, margem: 0, bruto: 0, quantidade: 0 }; value.margem += (item.gross_price - item.sale_fee * item.quantity - item.gross_price * price.imposto_percentual / 100 - price.custo_unitario * item.quantity); value.bruto += item.gross_price; value.quantidade += item.quantity; rank.set(item.sku, value); }
+    const ranking = [...rank.values()].map(row => ({ ...row, percentual: row.bruto ? row.margem / row.bruto * 100 : 0 })).sort((a, b) => b.margem - a.margem);
+    res.render('margem', { pedidos, totals, ranking, filtros: { de: req.query.de || '', ate: req.query.ate || '', status: status || '' }, statuses: ['confirmed', 'paid', 'cancelled', 'partially_refunded', 'pending_cancel'], ultimaSincronizacao: db.getMargemSyncAt(userId) });
+  });
+  app.post('/margem/atualizar', requireLogin, async (req, res) => { await ml.syncMargens(req.session.user_id, 60); res.redirect('/margem'); });
   app.get('/api/vendas', requireLogin, async (req, res) => res.json(await ml.sales(req.session.user_id)));
   app.use((req, res, next) => next(new AppError('Página não encontrada.', 404)));
   app.use((error, req, res, next) => {

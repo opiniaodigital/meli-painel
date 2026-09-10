@@ -56,9 +56,9 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
     try { return await pending; } finally { refreshing.delete(id); }
   }
 
-  async function api(userId, path) {
+  async function api(userId, path, extraHeaders = {}) {
     let token = await accessToken(userId);
-    const call = () => request(`https://api.mercadolibre.com${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    const call = () => request(`https://api.mercadolibre.com${path}`, { headers: { Authorization: `Bearer ${token}`, ...extraHeaders } });
     let result = await call();
     if (result.response.status === 401) {
       token = await accessToken(userId, token);
@@ -163,5 +163,39 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
     return { count: orders.length, from: start.toISOString(), to: end.toISOString() };
   }
 
-  return { exchangeToken, accessToken, api, sales, syncPedidos };
+  function sumDiscounts(body) {
+    return (body?.details || []).reduce((total, detail) => total + (detail.items || []).reduce((sum, item) => sum + Number(item.amounts?.seller || 0), 0), 0);
+  }
+
+  async function syncMargens(userId, days = 60) {
+    const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+    const rows = []; const seen = new Set(); let offset = 0; let total = null;
+    while (total === null || offset < total) {
+      const query = new URLSearchParams({ seller: String(userId), 'order.date_created.from': start.toISOString(), 'order.date_created.to': end.toISOString(), sort: 'date_asc', limit: '50', offset: String(offset) });
+      const page = await api(userId, `/orders/search?${query}`); total = page.paging?.total;
+      if (!Array.isArray(page.results) || !Number.isFinite(total)) throw new AppError('A resposta de pedidos está incompleta.');
+      if (!page.results.length && offset < total) throw new AppError('A consulta foi interrompida antes de carregar todos os pedidos.');
+      for (const order of page.results) {
+        const id = String(order.id); const created = Date.parse(order.date_created);
+        if (seen.has(id) || !Number.isFinite(created) || created < start.getTime() || created > end.getTime()) continue; seen.add(id);
+        const items = (order.order_items || []).map(line => ({ sku: line.item?.seller_sku || line.item?.seller_custom_field || null, title: line.item?.title || null, quantity: Number(line.quantity) || 0, unit_price: Number(line.unit_price) || 0, gross_price: Number(line.gross_price) || (Number(line.unit_price) || 0) * (Number(line.quantity) || 0), sale_fee: Number(line.sale_fee) || 0 }));
+        const bruto = items.reduce((sum, item) => sum + item.gross_price, 0) || Number(order.total_amount) || 0;
+        const tarifas = items.reduce((sum, item) => sum + item.sale_fee * item.quantity, 0);
+        let frete = 0; let freteDesconto = 0; let envioStatus = null; let envioTipo = null;
+        try {
+          const links = await api(userId, `/orders/${encodeURIComponent(id)}/shipments`); const list = Array.isArray(links) ? links : (links?.shipments || []); const link = list[0] || (order.shipping?.id ? order.shipping : null);
+          if (link?.id) {
+            const shipment = await api(userId, `/shipments/${encodeURIComponent(link.id)}`, { 'x-format-new': 'true' }); envioStatus = shipment.status || null; envioTipo = shipment.logistic_type || shipment.shipping_mode || null;
+            const costs = await api(userId, `/shipments/${encodeURIComponent(link.id)}/costs`, { 'x-format-new': 'true' }); const sender = (costs.senders || []).find(value => String(value.user_id) === String(userId)) || costs.senders?.[0]; frete = Number(sender?.cost) || 0; freteDesconto = (sender?.discounts || []).reduce((sum, value) => sum + Number(value.promoted_amount || 0), 0);
+          }
+        } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
+        let descontos = 0; try { descontos = sumDiscounts(await api(userId, `/orders/${encodeURIComponent(id)}/discounts`)); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
+        rows.push({ order_id: id, date_created: order.date_created, buyer_nickname: order.buyer?.nickname || null, items, bruto, tarifas, frete, frete_desconto: freteDesconto, descontos, status: order.status || 'unknown', envio_status: envioStatus, envio_tipo: envioTipo });
+      }
+      offset += page.results.length; if (!page.results.length) break;
+    }
+    db.replaceMargens(userId, rows); return { count: rows.length, from: start.toISOString(), to: end.toISOString() };
+  }
+
+  return { exchangeToken, accessToken, api, sales, syncPedidos, syncMargens };
 }
