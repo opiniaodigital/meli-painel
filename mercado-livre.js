@@ -67,7 +67,8 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
     if (!result.response.ok) {
       if (result.response.status === 401) throw new AppError('Conecte sua conta novamente para renovar a autorização.', 401);
       if (result.response.status === 429) throw new AppError('O limite de consultas foi atingido. Aguarde e tente novamente.', 429);
-      throw new AppError(`Não foi possível consultar os pedidos (Mercado Livre: HTTP ${result.response.status}).`);
+      const detail = result.body?.message || result.body?.error || '';
+      throw new AppError(`Não foi possível consultar a API do Mercado Livre (HTTP ${result.response.status}${detail ? `: ${detail}` : ''}).`);
     }
     return result.body;
   }
