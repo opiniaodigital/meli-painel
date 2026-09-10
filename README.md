@@ -36,7 +36,8 @@ Página local: **http://localhost:3000**. Clique em **Conectar Mercado Livre** p
 A rota de pós-venda usa `/post-purchase/v1/claims/search`, `/post-purchase/v2/claims/{claim_id}/returns` e `/post-purchase/v1/claims/{claim_id}/charges/return-cost`. O custo do retorno vem da cobrança informada pelo Mercado Livre; a tarifa de venda só é marcada como devolvida quando a API confirma. A disponibilidade de data de entrega, comprador e cobranças adicionais depende dos campos retornados para cada caso.
 - `/painel`: vendas e pedidos pagos em BRL criados nos últimos 30 dias corridos; top 10 por unidades, agrupando variações do mesmo anúncio.
 - `/api/vendas`: mesmos indicadores em JSON, com a sessão autenticada do navegador (sem expor tokens).
-- `/api/mc/realtime`: agregado inicial do módulo MC Vendas, com cards de vendas aprovadas, MC, custos, impostos, tarifas, frete, canceladas e linhas detalhadas; aceita `di` e `df` no formato `AAAA-MM-DD`.
+- `/promocao/mc` e `/mc`: módulo MC Vendas com Ao vivo, Análise, Preços e Ranking, filtros, simulador, custos manuais e atualização da tela a cada 60 segundos.
+- `/api/mc/realtime`: agregado autenticado de MC Vendas; aceita `di` e `df` no formato `AAAA-MM-DD`, com calendário de Brasília. Custos e fretes desconhecidos deixam a MC pendente. Veja [MC-VENDAS.md](MC-VENDAS.md) para cálculo, validação e integrações pendentes.
 
 O total soma `total_amount` dos pedidos pagos; o ranking soma quantidade × preço unitário. Valores brutos, sem descontar taxas ou reembolsos; não representam lucro. Pedidos cancelados, pendentes e de outras moedas são excluídos. O período exato é refinado localmente porque o filtro remoto considera horas. Todas as páginas são consultadas; falhas da API geram erro, nunca um total parcial apresentado como completo.
 

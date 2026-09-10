@@ -2,6 +2,9 @@ import express from 'express';
 import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { AppError, createMercadoLivre } from './mercado-livre.js';
+import { installMcRoutes } from './mc-routes.js';
+import { createBling } from './bling.js';
+import { installBlingRoutes } from './bling-routes.js';
 
 const random = () => randomBytes(32).toString('base64url');
 const hash = value => createHash('sha256').update(value).digest('base64url');
@@ -9,6 +12,7 @@ const hash = value => createHash('sha256').update(value).digest('base64url');
 export function createApp({ db, config, fetchImpl, now }) {
   const app = express();
   const ml = createMercadoLivre({ db, config, fetchImpl, now });
+  const bling = createBling({ db, config, fetchImpl, now });
   const secure = config.ML_REDIRECT_URI?.startsWith('https://');
   const cookie = { httpOnly: true, sameSite: 'lax', secure: Boolean(secure), path: '/' };
   app.disable('x-powered-by');
@@ -139,57 +143,9 @@ export function createApp({ db, config, fetchImpl, now }) {
   });
   app.get('/devolucoes.csv', requireLogin, (req, res) => { const rows = db.listDevolucoes(req.session.user_id, {}); const esc = v => `"${String(v ?? 'não disponível').replace(/"/g, '""')}"`; const head = ['pedido','data_venda','data_abertura','motivo','tipo','status','resolvido_por','reembolso','tarifa_devolvida','frete_retorno','outras_cobrancas','custo_real']; const lines = [head, ...rows.map(c => [c.order_id,c.sale_date,c.date_opened,c.reason,c.type,c.status,c.resolved_by,c.refund_amount,c.sale_fee_returned === true ? 'sim' : c.sale_fee_returned === false ? 'não' : 'não disponível',c.return_shipping_cost,c.other_charges,c.real_cost])].map(r => r.map(esc).join(';')); res.type('text/csv').set('Content-Disposition','attachment; filename="devolucoes.csv"').send('\ufeff' + lines.join('\r\n')); });
   app.post('/devolucoes/atualizar', requireLogin, async (req, res) => { try { await ml.syncDevolucoes(req.session.user_id, 90); res.redirect('/devolucoes'); } catch (error) { if (error instanceof AppError && error.status === 429) return res.redirect('/devolucoes?rate_limited=1'); throw error; } });
-  app.get('/mc', requireLogin, async (req, res) => {
-    const userId = req.session.user_id;
-    const lastSync = db.getMargemSyncAt(userId);
-    if (!lastSync || lastSync < Date.now() - 60 * 60 * 1000) await ml.syncMargens(userId, 60);
-    const approved = status => !['cancelled', 'invalid', 'invoice_pending', 'unpaid', 'cancelado'].includes(String(status).toLowerCase());
-    const costs = new Map(db.listCustos().map(row => [row.sku, row]));
-    const rows = db.listMargens(userId, {}).filter(row => approved(row.status)).map(row => {
-      let custo = 0; let imposto = 0; let completo = true;
-      for (const item of row.items) { const base = costs.get(item.sku); if (!base) { completo = false; continue; } custo += base.custo_unitario * (Number(item.quantity) || 0); imposto += (Number(item.gross_price) || 0) * base.imposto_percentual / 100; }
-      const valor = Number(row.bruto) || 0; const mc = completo ? valor - (Number(row.tarifas) || 0) - (Number(row.frete) || 0) - (Number(row.descontos) || 0) - custo - imposto : null;
-      return { ...row, valor, mc, mc_percentual: mc === null || !valor ? null : mc / valor * 100 };
-    });
-    const complete = rows.filter(row => row.mc !== null); const valor = complete.reduce((s, row) => s + row.valor, 0); const mc = complete.reduce((s, row) => s + row.mc, 0);
-    res.render('mc', { cards: { vendas: complete.length, valor, mc, percentual: valor ? mc / valor * 100 : 0 }, rows: rows.slice(0, 50), ultimaSincronizacao: db.getMargemSyncAt(userId) });
-  });
+  installBlingRoutes(app, { db, bling, config, requireLogin });
+  installMcRoutes(app, { db, ml, bling, requireLogin, now });
   app.get('/api/vendas', requireLogin, async (req, res) => res.json(await ml.sales(req.session.user_id)));
-  // MC Vendas: agregado canônico sobre as margens já sincronizadas.
-  app.get('/api/mc/realtime', requireLogin, async (req, res) => {
-    const userId = req.session.user_id;
-    const lastSync = db.getMargemSyncAt(userId);
-    if (!lastSync || lastSync < Date.now() - 60 * 60 * 1000) await ml.syncMargens(userId, 60);
-    const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
-    const from = validDate(req.query.di) ? `${req.query.di}T00:00:00.000Z` : null;
-    const to = validDate(req.query.df) ? `${req.query.df}T23:59:59.999Z` : null;
-    const approved = status => !['cancelled', 'invalid', 'invoice_pending', 'unpaid', 'cancelado'].includes(String(status).toLowerCase());
-    const costs = new Map(db.listCustos().map(row => [row.sku, row]));
-    const rows = db.listMargens(userId, { from, to }).filter(row => approved(row.status)).map(row => {
-      let custo = 0; let imposto = 0; let completo = true;
-      for (const item of row.items) {
-        const base = costs.get(item.sku);
-        if (!base) { completo = false; continue; }
-        const quantity = Number(item.quantity) || 0;
-        custo += base.custo_unitario * quantity;
-        imposto += (Number(item.gross_price) || 0) * base.imposto_percentual / 100;
-      }
-      const valorProduto = Number(row.bruto) || 0;
-      const mc = completo ? valorProduto - (Number(row.tarifas) || 0) - (Number(row.frete) || 0) - (Number(row.descontos) || 0) - custo - imposto : null;
-      return { ...row, valor_produto: valorProduto, custo, imposto, mc, mc_percentual: mc === null || !valorProduto ? null : mc / valorProduto * 100 };
-    });
-    const complete = rows.filter(row => row.mc !== null);
-    const sum = key => complete.reduce((total, row) => total + (Number(row[key]) || 0), 0);
-    const valorProduto = sum('valor_produto');
-    const mc = sum('mc');
-    res.json({
-      periodo: { de: req.query.di || null, ate: req.query.df || null },
-      cards: { vendas_aprovadas: complete.length, valor_produto: valorProduto, mc, mc_percentual: valorProduto ? mc / valorProduto * 100 : 0, custo: sum('custo'), imposto: sum('imposto'), tarifas: sum('tarifas'), frete: sum('frete'), canceladas: db.listMargens(userId, { from, to }).filter(row => !approved(row.status)).length },
-      por_canal: [{ canal: 'mercado_livre', vendas: complete.length, valor_produto: valorProduto, mc }],
-      vendas: rows,
-      ultima_sincronizacao: db.getMargemSyncAt(userId)
-    });
-  });
   app.use((req, res, next) => next(new AppError('Página não encontrada.', 404)));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);

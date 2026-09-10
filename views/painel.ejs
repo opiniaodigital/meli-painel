@@ -6,6 +6,7 @@
   <main>
     <div class="page-heading"><div><span class="eyebrow">SEU NEGÓCIO EM NÚMEROS</span><h1>Visão geral</h1><p>Vendedor <%= data.vendedor_id %> · Últimos 30 dias</p></div><a class="button secondary" href="/painel">Atualizar dados ↻</a></div>
     <div class="period"><%= date(data.periodo.de) %> — <%= date(data.periodo.ate) %> <span>Horário de Brasília</span></div>
+    <nav class="actions" aria-label="Promoção"><a class="button secondary" href="/promocao/mc">MC Vendas · Margem por venda</a></nav>
     <section class="metrics" aria-label="Resumo de vendas">
       <article class="metric primary"><span>Total de vendas</span><strong><%= money(data.total_vendas) %></strong><small>Valor bruto dos pedidos pagos em reais</small></article>
       <article class="metric"><span>Pedidos pagos</span><strong><%= data.quantidade_pedidos.toLocaleString('pt-BR') %></strong><small>Pedidos criados no período</small></article>

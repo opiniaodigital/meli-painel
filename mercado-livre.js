@@ -176,10 +176,15 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
       const page = await api(userId, `/orders/search?${query}`); total = page.paging?.total;
       if (!Array.isArray(page.results) || !Number.isFinite(total)) throw new AppError('A resposta de pedidos está incompleta.');
       if (!page.results.length && offset < total) throw new AppError('A consulta foi interrompida antes de carregar todos os pedidos.');
-      for (const order of page.results) {
-        const id = String(order.id); const created = Date.parse(order.date_created);
+      for (const searchOrder of page.results) {
+        const id = String(searchOrder.id); const created = Date.parse(searchOrder.date_created);
         if (seen.has(id) || !Number.isFinite(created) || created < start.getTime() || created > end.getTime()) continue; seen.add(id);
-        const items = (order.order_items || []).map(line => ({ sku: line.item?.seller_sku || line.item?.seller_custom_field || null, title: line.item?.title || null, quantity: Number(line.quantity) || 0, unit_price: Number(line.unit_price) || 0, gross_price: Number(line.gross_price) || (Number(line.unit_price) || 0) * (Number(line.quantity) || 0), sale_fee: Number(line.sale_fee) || 0 }));
+        const order = await api(userId, `/orders/${encodeURIComponent(id)}`);
+        if (String(order.id) !== id || !Array.isArray(order.order_items)) throw new AppError('Um pedido retornou dados incompletos.');
+        if (order.currency_id !== 'BRL') continue;
+        if (order.order_items.some(line => !Number.isFinite(line.unit_price) || !Number.isInteger(line.quantity) || line.quantity <= 0)) throw new AppError('Um pedido retornou itens inválidos.');
+        const meta = { frete_confirmado: false, desconto_confirmado: false, tarifa_confirmada: order.order_items.every(line => Number.isFinite(line.sale_fee)), frete_comprador: null, reembolso: Array.isArray(order.payments) && order.payments.length && order.payments.every(p => Number.isFinite(p.transaction_amount_refunded)) ? order.payments.reduce((s,p) => s + p.transaction_amount_refunded, 0) : null };
+        const items = (order.order_items || []).map(line => ({ id: line.item?.id || null, sku: line.item?.seller_sku || line.item?.seller_custom_field || null, title: line.item?.title || null, quantity: Number(line.quantity) || 0, unit_price: Number(line.unit_price) || 0, gross_price: Number.isFinite(line.gross_price) ? line.gross_price : line.unit_price * line.quantity, sale_fee: Number(line.sale_fee) || 0 }));
         const bruto = items.reduce((sum, item) => sum + item.gross_price, 0) || Number(order.total_amount) || 0;
         const tarifas = items.reduce((sum, item) => sum + item.sale_fee * item.quantity, 0);
         let frete = 0; let freteDesconto = 0; let envioStatus = null; let envioTipo = null;
@@ -187,11 +192,15 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
           const links = await api(userId, `/orders/${encodeURIComponent(id)}/shipments`); const list = Array.isArray(links) ? links : (links?.shipments || []); const link = list[0] || (order.shipping?.id ? order.shipping : null);
           if (link?.id) {
             const shipment = await api(userId, `/shipments/${encodeURIComponent(link.id)}`, { 'x-format-new': 'true' }); envioStatus = shipment.status || null; envioTipo = shipment.logistic_type || shipment.shipping_mode || null;
-            const costs = await api(userId, `/shipments/${encodeURIComponent(link.id)}/costs`, { 'x-format-new': 'true' }); const sender = (costs.senders || []).find(value => String(value.user_id) === String(userId)) || costs.senders?.[0]; frete = Number(sender?.cost) || 0; freteDesconto = (sender?.discounts || []).reduce((sum, value) => sum + Number(value.promoted_amount || 0), 0);
+            const costs = await api(userId, `/shipments/${encodeURIComponent(link.id)}/costs`, { 'x-format-new': 'true' }); const sender = (costs.senders || []).find(value => String(value.user_id) === String(userId)); frete = Number(sender?.cost) || 0; freteDesconto = (sender?.discounts || []).reduce((sum, value) => sum + Number(value.promoted_amount || 0), 0);
+            meta.shipment_id = String(link.id);
+            meta.frete_confirmado = Number.isFinite(sender?.cost) && !order.pack_id && !['self_service', 'custom', 'me1'].includes(envioTipo);
+            meta.frete_comprador = !order.pack_id && Number.isFinite(costs.receiver?.cost) ? costs.receiver.cost : null;
+            if (order.pack_id) meta.frete_motivo = 'Envio em pacote: rateio por conciliar';
           }
         } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
-        let descontos = 0; try { descontos = sumDiscounts(await api(userId, `/orders/${encodeURIComponent(id)}/discounts`)); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
-        rows.push({ order_id: id, date_created: order.date_created, buyer_nickname: order.buyer?.nickname || null, items, bruto, tarifas, frete, frete_desconto: freteDesconto, descontos, status: order.status || 'unknown', envio_status: envioStatus, envio_tipo: envioTipo });
+        let descontos = 0; try { const discounts = await api(userId, `/orders/${encodeURIComponent(id)}/discounts`); descontos = sumDiscounts(discounts); meta.desconto_confirmado = Array.isArray(discounts.details) && (discounts.details.length === 0 || order.order_items.every(line => Number.isFinite(line.gross_price))); } catch (error) { if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error; }
+        rows.push({ order_id: id, date_created: new Date(order.date_created).toISOString(), buyer_nickname: order.buyer?.nickname || null, items, bruto, tarifas, frete, frete_desconto: freteDesconto, descontos, status: order.status || 'unknown', envio_status: envioStatus, envio_tipo: envioTipo, mc_meta: meta });
       }
       offset += page.results.length; if (!page.results.length) break;
     }

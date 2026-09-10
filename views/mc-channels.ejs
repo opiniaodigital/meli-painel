@@ -1,0 +1,2 @@
+<% if (!d.byChannel.length) { %><p>Sem vendas aprovadas no período.</p><% } %>
+<% d.byChannel.forEach(c => { %><div class="mini-row"><span><%= channelName(c.channel) %></span><strong><%= cmoney(c.revenue) %></strong></div><progress max="<%= Math.max(d.totals.revenue,1) %>" value="<%= Math.max(c.revenue,0) %>" aria-label="Faturamento de <%= channelName(c.channel) %>"></progress><% }) %>
