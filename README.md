@@ -29,6 +29,7 @@ Página local: **http://localhost:3000**. Clique em **Conectar Mercado Livre** p
 ## Dados e rotas
 
 - `/`: página inicial; `/auth/mercadolivre`: início do OAuth; `/callback`: retorno da autorização.
+- `/pedidos`: tabela dos pedidos dos últimos 60 dias, com filtros de período/status e botão de sincronização; os dados ficam em cache no SQLite por até uma hora.
 - `/painel`: vendas e pedidos pagos em BRL criados nos últimos 30 dias corridos; top 10 por unidades, agrupando variações do mesmo anúncio.
 - `/api/vendas`: mesmos indicadores em JSON, com a sessão autenticada do navegador (sem expor tokens).
 

@@ -115,5 +115,53 @@ export function createMercadoLivre({ db, config, fetchImpl = fetch, now = Date.n
         .slice(0, 10).map(({ centavos, ...item }) => ({ ...item, total_vendas: centavos / 100 })),
     };
   }
-  return { exchangeToken, accessToken, api, sales };
+
+  const shippingType = value => ({ fulfillment: 'Full', full: 'Full', drop_off: 'Coleta', xd_drop_off: 'Coleta',
+    self_service: 'Flex', flex: 'Flex', cross_docking: 'Correios', carrier: 'Correios', me1: 'Correios' }[String(value || '').toLowerCase()] || (value ? String(value) : null));
+
+  async function shipping(order, userId) {
+    const direct = order.shipping || order.shipment;
+    if (direct) return { status: direct.status || null, type: shippingType(direct.logistic_type || direct.type) };
+    try {
+      const links = await api(userId, `/orders/${encodeURIComponent(order.id)}/shipments`);
+      const list = Array.isArray(links) ? links : (Array.isArray(links?.shipments) ? links.shipments : []);
+      const link = list[0];
+      if (!link?.id) return { status: null, type: null };
+      const detail = await api(userId, `/shipments/${encodeURIComponent(link.id)}`);
+      return { status: detail.status || link.status || null, type: shippingType(detail.logistic_type || detail.type || link.type) };
+    } catch (error) {
+      if (error instanceof AppError && (error.status === 401 || error.status === 429)) throw error;
+      return { status: null, type: null };
+    }
+  }
+
+  async function syncPedidos(userId, days = 60) {
+    const end = new Date(now()); const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+    const orders = []; const seen = new Set(); let offset = 0; let total = null;
+    while (total === null || offset < total) {
+      const query = new URLSearchParams({ seller: String(userId), 'order.date_created.from': start.toISOString(),
+        'order.date_created.to': end.toISOString(), sort: 'date_asc', limit: '50', offset: String(offset) });
+      const page = await api(userId, `/orders/search?${query}`);
+      if (!Array.isArray(page.results) || !Number.isFinite(page.paging?.total)) throw new AppError('A resposta de pedidos está incompleta.');
+      total = page.paging.total;
+      if (!page.results.length && offset < total) throw new AppError('A consulta foi interrompida antes de carregar todos os pedidos.');
+      for (const order of page.results) {
+        const id = String(order.id); const created = Date.parse(order.date_created);
+        if (seen.has(id) || !Number.isFinite(created) || created < start.getTime() || created > end.getTime()) continue;
+        seen.add(id);
+        const ship = await shipping(order, userId);
+        orders.push({ order_id: id, date_created: order.date_created, buyer_nickname: order.buyer?.nickname || null,
+          items: (Array.isArray(order.order_items) ? order.order_items : []).map(line => ({ sku: line.item?.seller_sku || line.item?.seller_custom_field || null,
+            title: line.item?.title || null, quantity: Number(line.quantity) || 0, unit_price: Number(line.unit_price) || 0 })),
+          total_amount: Number(order.total_amount) || 0, currency_id: order.currency_id || null, order_status: order.status || 'unknown',
+          shipping_status: ship.status, shipping_type: ship.type });
+      }
+      offset += page.results.length;
+      if (page.results.length === 0) break;
+    }
+    db.replacePedidos(userId, orders);
+    return { count: orders.length, from: start.toISOString(), to: end.toISOString() };
+  }
+
+  return { exchangeToken, accessToken, api, sales, syncPedidos };
 }
